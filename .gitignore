@@ -1,1 +1,10 @@
+.pio
+test/
 *.zip
+
+# We don't need these currently
+lib/
+include/
+
+# VSCode stuff
+.vscode/
