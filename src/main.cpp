@@ -32,10 +32,20 @@
 #define PIN_ADDRESS_A1 10
 #define PIN_ADDRESS_A2 9
 
+#define DETECT_ACK 0xDA
+
+/**
+ * @brief Possible device commands.
+ */
 enum class CommandType : byte {
-	SELF_TEST = 0x00,
-	CHECK_CARD = 0x01,
-	BAD_CARD = 0x02
+	DETECT = 0xFA,
+	INIT = 0xFB,
+	GET_FIRMWARE = 0xFC,
+	SELF_TEST = 0xDC,
+	GET_TAGS = 0xFD,
+	GET_AVAILABLE = 0xFE,
+	BAD_CARD = 0xDD,
+	GET_MIFARE_VERSION = 0xDB
 };
 
 // Global vars
@@ -71,7 +81,12 @@ void performSelfTest() {
 	Serial.print(F("INFO: Performing self test ..."));
 	bool result = reader.PCD_PerformSelfTest();
 	Serial.println(result ? F("PASS") : F("FAIL"));
-	Wire.write((uint8_t)result);
+
+	Serial.println(F("INFO: Sending result"));
+	byte packet[2];
+	packet[0] = (byte)CommandType::SELF_TEST;
+	packet[1] = (byte)result;
+	Wire.write(packet, sizeof(packet));
 }
 
 /**
@@ -81,6 +96,7 @@ void performSelfTest() {
  */
 void badCard() {
 	Serial.println(F("ERROR: Host controller indicates bad card!"));
+	Wire.write((byte)CommandType::BAD_CARD);
 	for (uint8_t i = 0; i < 3; i++) {
 		actLED.on();
 		piezo.on();
@@ -100,12 +116,92 @@ void clearNUID() {
 }
 
 /**
+ * @brief Sends an acknowledgement back to the host indicating that
+ * we are, in fact, a CyGate4 Fob Reader and we are present.
+ */
+void sendDetectAck() {
+	Serial.println(F("INFO: Sending detect ACK."));
+	Wire.write(DETECT_ACK);
+}
+
+/**
+ * @brief Sends a packet containing the firmware version back to the host.
+ */
+void sendFirmware() {
+	Serial.println(F("INFO: Sending firmware version"));
+	String fw = String(FIRMWARE_VERSION);
+	size_t size = fw.length() + 2;
+	
+	byte* buffer = new byte[size];
+	buffer[0] = (byte)CommandType::GET_FIRMWARE;
+	buffer[1] = fw.length();
+	fw.getBytes(buffer, fw.length(), 2);
+
+	Wire.write(buffer, size);
+
+	delete[] buffer;
+}
+
+/**
+ * @brief Checks to see if a new tag is present.
+ * 
+ * @return true if a tag has been scanned that isn't stored in memory yet.
+ * @return false if the tag has already been recently scanned.
+ */
+bool isNewTagPresent() {
+	return reader.uid.uidByte[0] != nuidPICC[0] || 
+    	reader.uid.uidByte[1] != nuidPICC[1] || 
+    	reader.uid.uidByte[2] != nuidPICC[2] || 
+    	reader.uid.uidByte[3] != nuidPICC[3];
+}
+
+/**
+ * @brief Sends a packet to the host indicating a new tag is present.
+ */
+void sendTagPresence() {
+	Serial.println(F("INFO: Sending tag presence"));
+
+	byte packet[2];
+	packet[0] = (byte)CommandType::GET_AVAILABLE;
+	packet[1] = (byte)isNewTagPresent();
+	
+	Wire.write(packet, sizeof(packet));
+}
+
+/**
  * @brief Sends the tag to the CyGate4 host over I2C.
  */
 void sendCard() {
 	Serial.println(F("INFO: Sending card data"));
-	Wire.write(nuidPICC, sizeof(nuidPICC));
+	byte packet[14];
+	packet[0] = (byte)CommandType::GET_TAGS;
+	packet[1] = 1;  // TODO Change this when we support more than one tag.
+	packet[2] = sizeof(nuidPICC);
+
+	// Copy tag bytes
+	for (uint8_t i = 0; i < packet[2]; i++) {
+		packet[3 + i] = nuidPICC[i];
+	}
+
+	uint8_t startIdx = 4 + packet[2];
+	for (uint8_t j = startIdx; startIdx < 14; j++) {
+		packet[j] = 0xFF;
+	}
+
+	Wire.write(packet, sizeof(packet));
 	clearNUID();
+}
+
+/**
+ * @brief Sends a packet to the host containing the RFID reader version.
+ */
+void sendMiFareVersion() {
+	Serial.println(F("INFO: Sending RFID reader version"));
+	byte packet[2];
+	packet[0] = (byte)CommandType::GET_MIFARE_VERSION;
+	packet[1] = reader.PCD_ReadRegister(MFRC522::VersionReg);
+
+	Wire.write(packet, sizeof(packet));
 }
 
 /**
@@ -125,14 +221,34 @@ void commBusReceiveHandler(int byteCount) {
  */
 void commBusRequestHandler() {
 	switch (command) {
+		case (byte)CommandType::INIT:
+			// TODO Not sure exactly what to do here just yet.
+			// Call setup() again?
+			// Soft-reboot (asm jmp 0)?
+			// Just re-init the reader?
+			// For now, just ack.
+			Wire.write((byte)CommandType::INIT);
+			break;
+		case (byte)CommandType::DETECT:
+			sendDetectAck();
+			break;
+		case (byte)CommandType::GET_FIRMWARE:
+			sendFirmware();
+			break;
 		case (byte)CommandType::SELF_TEST:
 			performSelfTest();
 			break;
-		case (byte)CommandType::CHECK_CARD:
+		case (byte)CommandType::GET_TAGS:
 			sendCard();
 			break;
 		case (byte)CommandType::BAD_CARD:
 			badCard();
+			break;
+		case (byte)CommandType::GET_AVAILABLE:
+			sendTagPresence();
+			break;
+		case (byte)CommandType::GET_MIFARE_VERSION:
+			sendMiFareVersion();
 			break;
 		default:
 			Serial.print(F("WARN: Unrecognized command received: 0x"));
@@ -176,10 +292,7 @@ bool isValidPiccType() {
  * already exists in the internal buffer, then it is ignored.
  */
 void readNewTag() {
-	if (reader.uid.uidByte[0] != nuidPICC[0] || 
-    	reader.uid.uidByte[1] != nuidPICC[1] || 
-    	reader.uid.uidByte[2] != nuidPICC[2] || 
-    	reader.uid.uidByte[3] != nuidPICC[3] ) {
+	if (isNewTagPresent()) {
     	Serial.println(F("INFO: New card detected."));
 
 		// Store NUID into nuidPICC array
