@@ -356,6 +356,7 @@ void initReader() {
 	reader.PCD_Init();
 	delay(4);
 	Serial.println(F("DONE"));
+	Serial.print(F("INIT: "));
 	reader.PCD_DumpVersionToSerial();
 }
 
@@ -367,7 +368,7 @@ void initCommBus() {
 	Serial.print(F("INIT: Initializing I2C comm bus... "));
 
 	byte addressOffset = 0;
-	for (uint8_t i = sizeof(addrPins) - 1; i >= 0; i--) {
+	for (uint8_t i = 0; i < 3; i++) {
 		pinMode(addrPins[i], INPUT_PULLUP);
 		delay(1);
 
