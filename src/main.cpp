@@ -13,15 +13,17 @@
 
 #include <Arduino.h>
 #include <SPI.h>
-#include <Wire.h>
 #include "LED.h"
 #include "Buzzer.h"
 #include "MFRC522.h"
+#include "Modbus.h"
 
 #define FIRMWARE_VERSION "1.0"
 
 #define DEBUG_BAUD_RATE 9600
+#define MODBUS_BAUD_RATE 115200
 #define ADDRESS_BASE 0x10
+#define MODBUS_HOST_ADDR 0
 
 // Pin definitions
 #define PIN_PWR_LED 7
@@ -32,6 +34,7 @@
 #define PIN_ADDRESS_A0 11
 #define PIN_ADDRESS_A1 10
 #define PIN_ADDRESS_A2 9
+#define PIN_MODBUS_ENABLE 2
 
 // I2C packet data
 #define DETECT_ACK 0xDA
@@ -61,8 +64,8 @@ LED actLED(PIN_ACT_LED, NULL);
 Buzzer piezo(PIN_PIEZO, NULL, "");
 MFRC522 reader(PIN_MFRC522_SS, PIN_MFRC522_RESET);
 byte nuidPICC[TAG_DATA_SIZE];  // TODO Should this be volatile?
-volatile byte command = 0xFF;
-volatile bool processCommand = false;
+//volatile byte command = 0xFF;
+//volatile bool processCommand = false;
 const short addrPins[3] = {
 	PIN_ADDRESS_A0,
 	PIN_ADDRESS_A1,
@@ -97,7 +100,7 @@ void performSelfTest() {
 	// Serial.print(F("DEBUG: Sending packet = "));
 	// printHex(packet, SELF_TEST_SIZE);
 	// Serial.println();
-	Wire.write(packet, SELF_TEST_SIZE);
+	Modbus.write(MODBUS_HOST_ADDR, packet, SELF_TEST_SIZE);
 }
 
 /**
@@ -107,10 +110,11 @@ void performSelfTest() {
  */
 void badCard() {
 	// Serial.println(F("ERROR: Host controller indicates bad card!"));
-	byte response = (byte)CommandType::BAD_CARD;
+	byte response[1];
+	response[0] = (byte)CommandType::BAD_CARD;
 	// Serial.print(F("DEBUG: Sending response = 0x"));
 	// Serial.println(response, HEX);
-	Wire.write(response);
+	Modbus.write(MODBUS_HOST_ADDR, response, 1);
 	for (uint8_t i = 0; i < 3; i++) {
 		actLED.on();
 		piezo.on();
@@ -118,6 +122,8 @@ void badCard() {
 		piezo.off();
 		actLED.off();
 	}
+
+	delete[] response;
 }
 
 /**
@@ -135,10 +141,12 @@ void clearNUID() {
  */
 void sendDetectAck() {
 	// Serial.println(F("INFO: Sending detect ACK."));
-	byte response = (byte)DETECT_ACK;
+	byte response[1];
+	response[0] = (byte)DETECT_ACK;
 	// Serial.print(F("DEBUG: Sending response = 0x"));
 	// Serial.println(response, HEX);
-	Wire.write(response);
+	Modbus.write(MODBUS_HOST_ADDR, response, 1);
+	delete[] response;
 }
 
 /**
@@ -168,7 +176,7 @@ void sendFirmware() {
 	// }
 
 	// Serial.println();
-	Wire.write(buffer, size);
+	Modbus.write(MODBUS_HOST_ADDR, buffer, size);
 
 	delete[] buffer;
 }
@@ -219,7 +227,8 @@ void sendTagPresence() {
 	// printHex(packet, TAG_PRESENCE_SIZE);
 	// Serial.println();
 	
-	Wire.write(packet, TAG_PRESENCE_SIZE);
+	Modbus.write(MODBUS_HOST_ADDR, packet, TAG_PRESENCE_SIZE);
+	delete[] packet;
 }
 
 /**
@@ -241,7 +250,8 @@ void sendCard() {
 	// printHex(packet, TAG_PACKET_SIZE);
 	// Serial.println();
 
-	Wire.write(packet, TAG_PACKET_SIZE);
+	Modbus.write(MODBUS_HOST_ADDR, packet, TAG_PACKET_SIZE);
+	delete[] packet;
 	clearNUID();
 }
 
@@ -258,27 +268,28 @@ void sendMiFareVersion() {
 	// printHex(packet, READER_FW_SIZE);
 	// Serial.println();
 
-	Wire.write(packet, READER_FW_SIZE);
+	Modbus.write(MODBUS_HOST_ADDR, packet, READER_FW_SIZE);
+	delete[] packet;
 }
 
 /**
  * @brief Handles data received on the I2C bus.
  * @param byteCount The number of bytes received.
  */
-void commBusReceiveHandler(int byteCount) {
-	// NOTE: We *should* only be recieving single-byte commands.
-	command = Wire.read();
-	processCommand = true;
-}
+// void commBusReceiveHandler(int byteCount) {
+// 	// NOTE: We *should* only be recieving single-byte commands.
+// 	command = Wire.read();
+// 	processCommand = true;
+// }
 
 /**
  * @brief Handles requests received on the I2C bus and acknowledges valid
  * commands by sending the appropriate data back to the host.
  */
-void commBusRequestHandler() {
-	if (!processCommand) {
-		return;
-	}
+void handleCommand(byte command) {
+	// if (!processCommand) {
+	// 	return;
+	// }
 
 	// Serial.println(F("INFO: I2C request received"));
 	// Serial.print(F("INFO: Received command: 0x"));
@@ -293,6 +304,7 @@ void commBusRequestHandler() {
 	// 	Serial.println(F("INFO: Bus scan from master"));
 	// }
 
+	
 	switch (command) {
 		case (byte)CommandType::INIT:
 			// TODO Not sure exactly what to do here just yet.
@@ -301,7 +313,11 @@ void commBusRequestHandler() {
 			// Just re-init the reader?
 			// For now, just ack.
 			//Serial.println(F("INFO: Sending init ACK."));
-			Wire.write((byte)CommandType::INIT);
+			//Wire.write((byte)CommandType::INIT);
+			byte buffer[1];
+			buffer[0] = (byte)CommandType::INIT;
+			Modbus.write(MODBUS_HOST_ADDR, buffer, 1);
+			delete[] buffer;
 			break;
 		case (byte)CommandType::DETECT:
 			sendDetectAck();
@@ -330,7 +346,7 @@ void commBusRequestHandler() {
 			break;
 	}
 
-	processCommand = false;
+	//processCommand = false;
 }
 
 /**
@@ -393,6 +409,29 @@ void idleReader() {
 	reader.PCD_StopCrypto1();
 }
 
+int getDeviceAddress() {
+	byte addressOffset = 0;
+	for (uint8_t i = 0; i < 3; i++) {
+		pinMode(addrPins[i], INPUT_PULLUP);
+		delay(1);
+
+		addressOffset <<= 1;
+		if (digitalRead(addrPins[i]) == HIGH) {
+			addressOffset |= 0x01;
+		}
+	}
+
+	int busAddress = ADDRESS_BASE + addressOffset;
+	return busAddress;
+}
+
+void onReceiveHandler(ModbusPacket* packet) {
+	if (packet->payloadSize == 1) {
+		// We should only be getting single-byte commands.
+		handleCommand(packet->payload[0]);
+	}
+}
+
 /**
  * @brief Initializes the RS-232 serial console.
  */
@@ -436,33 +475,45 @@ void initReader() {
 	reader.PCD_DumpVersionToSerial();
 }
 
+
+void initModbus() {
+	int address = getDeviceAddress();
+	Serial.print(F("INIT: Initializing modbus on address 0x"));
+	Serial.print(address, HEX);
+	Serial.print(F(" ..."));
+	Serial1.begin(MODBUS_BAUD_RATE);
+	Modbus.begin(&Serial1, address, PIN_MODBUS_ENABLE);
+	Modbus.setOnRecieve(onReceiveHandler);
+	Serial.println(F("DONE"));
+}
+
 /**
  * @brief Initializes the I2C communication bus which allows the CyGate4 host
  * controller to connect.
  */
-void initCommBus() {
-	Serial.print(F("INIT: Initializing I2C comm bus... "));
+// void initCommBus() {
+// 	Serial.print(F("INIT: Initializing I2C comm bus... "));
 
-	byte addressOffset = 0;
-	for (uint8_t i = 0; i < 3; i++) {
-		pinMode(addrPins[i], INPUT_PULLUP);
-		delay(1);
+// 	byte addressOffset = 0;
+// 	for (uint8_t i = 0; i < 3; i++) {
+// 		pinMode(addrPins[i], INPUT_PULLUP);
+// 		delay(1);
 
-		addressOffset <<= 1;
-		if (digitalRead(addrPins[i]) == HIGH) {
-			addressOffset |= 0x01;
-		}
-	}
+// 		addressOffset <<= 1;
+// 		if (digitalRead(addrPins[i]) == HIGH) {
+// 			addressOffset |= 0x01;
+// 		}
+// 	}
 
-	int busAddress = ADDRESS_BASE + addressOffset;
-	Wire.begin(busAddress);
-	Wire.onReceive(commBusReceiveHandler);
-	Wire.onRequest(commBusRequestHandler);
+// 	int busAddress = ADDRESS_BASE + addressOffset;
+// 	Wire.begin(busAddress);
+// 	Wire.onReceive(commBusReceiveHandler);
+// 	Wire.onRequest(commBusRequestHandler);
 	
-	Serial.println(F("DONE"));
-	Serial.print(F("INIT: I2C bus address: "));
-	Serial.println(busAddress, HEX);
-}
+// 	Serial.println(F("DONE"));
+// 	Serial.print(F("INIT: I2C bus address: "));
+// 	Serial.println(busAddress, HEX);
+// }
 
 /**
  * @brief Boot sequence. Initializes the firmware.
@@ -471,7 +522,8 @@ void setup() {
 	initSerial();
 	initOutputs();
 	initReader();
-	initCommBus();
+	//initCommBus();
+	initModbus();
 	Serial.println(F("INIT: Boot sequence complete."));
 }
 
@@ -479,6 +531,7 @@ void setup() {
  * @brief Main program loop. Checks for new cards being presented to the reader.
  */
 void loop() {
+	Modbus.loop();
 	if (!reader.PICC_IsNewCardPresent() || !reader.PICC_ReadCardSerial()) {
 		return;
 	}
