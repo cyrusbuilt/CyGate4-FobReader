@@ -101,6 +101,7 @@ void performSelfTest() {
 	// printHex(packet, SELF_TEST_SIZE);
 	// Serial.println();
 	Modbus.write(MODBUS_HOST_ADDR, packet, SELF_TEST_SIZE);
+	delete[] packet;
 }
 
 /**
@@ -177,7 +178,6 @@ void sendFirmware() {
 
 	// Serial.println();
 	Modbus.write(MODBUS_HOST_ADDR, buffer, size);
-
 	delete[] buffer;
 }
 
@@ -272,6 +272,13 @@ void sendMiFareVersion() {
 	delete[] packet;
 }
 
+void sendInitAck() {
+	byte buffer[1];
+	buffer[0] = (byte)CommandType::INIT;
+	Modbus.write(MODBUS_HOST_ADDR, buffer, 1);
+	delete[] buffer;
+}
+
 /**
  * @brief Handles data received on the I2C bus.
  * @param byteCount The number of bytes received.
@@ -314,10 +321,7 @@ void handleCommand(byte command) {
 			// For now, just ack.
 			//Serial.println(F("INFO: Sending init ACK."));
 			//Wire.write((byte)CommandType::INIT);
-			byte buffer[1];
-			buffer[0] = (byte)CommandType::INIT;
-			Modbus.write(MODBUS_HOST_ADDR, buffer, 1);
-			delete[] buffer;
+			sendInitAck();
 			break;
 		case (byte)CommandType::DETECT:
 			sendDetectAck();

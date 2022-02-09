@@ -61,7 +61,7 @@ bool ModbusClass::readPacket(ModbusPacket* packet) {
 	// Was this packet intended for us?
 	if (buffer[0] == this->_address) {
 		packet->targetAddr = (uint8_t)buffer[0];
-		packet->targetAddr = (uint8_t)buffer[1];
+		packet->srcAddr = (uint8_t)buffer[1];
 		packet->payloadSize = (size_t)buffer[2];
 		
 		byte payload[packet->payloadSize];
